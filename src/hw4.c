@@ -26,7 +26,6 @@ typedef enum
 } GameState;
 
 int *convert_to_int_array(const char *input_str, int *size);
-void handle_client(int conn_fd, int port, GameState *state, int *board_width, int *board_height, int game_boards[2][MAX_SIZE][MAX_SIZE]);
 void send_response(int conn_fd, const char *response);
 int read_message(int conn_fd, char *buffer, int buffer_size);
 void begin_game_logic(int conn_fd, GameState *state, int *board_width, int *board_height, const char *buffer, int player_num);
@@ -183,15 +182,65 @@ int main()
     {
         for (int i = 0; i < 2; i++)
         {
-            handle_client(conn_fds[i], ports[i], &state[i], &board_width, &board_height, game_boards);
+            char buffer[BUFFER_SIZE];
+            memset(buffer, 0, BUFFER_SIZE);
+            int valid_input = 0;
 
-            // Check if both clients are disconnected
-            if (state[i] == STATE_DISCONNECTED)
+            while (!valid_input)
             {
-                printf("[Server] Both clients disconnected. Shutting down server.\n");
-                close(listen_fds[0]);
-                close(listen_fds[1]);
-                return EXIT_SUCCESS;
+                int nbytes = read_message(conn_fds[i], buffer, BUFFER_SIZE);
+                if (nbytes <= 0)
+                {
+                    printf("[Server] Client on port %d disconnected.\n", ports[i]);
+                    state[i] = STATE_DISCONNECTED;
+                    close(conn_fds[i]);
+
+                    // Check if both clients disconnected
+                    if (state[0] == STATE_DISCONNECTED && state[1] == STATE_DISCONNECTED)
+                    {
+                        printf("[Server] Both clients disconnected. Shutting down server.\n");
+                        close(listen_fds[0]);
+                        close(listen_fds[1]);
+                        return EXIT_SUCCESS;
+                    }
+                    break;
+                }
+
+                printf("[Server] Received from client on port %d: %s\n", ports[i], buffer);
+
+                int player_num = (ports[i] == PORT1) ? 1 : 2;
+
+                if (strcmp(buffer, "F") == 0)
+                {
+                    printf("[Server] Client on port %d has forfeited.\n", ports[i]);
+                    send_response(conn_fds[i], "H 0");
+                    send_response(conn_fds[(i + 1) % 2], "H 1");
+                    state[i] = STATE_DISCONNECTED;
+                    
+                    state[(i + 1) % 2] = STATE_DISCONNECTED;
+                    close(conn_fds[i]);
+                    close(conn_fds[(i + 1) % 2]);
+                    break;
+                }
+
+                // Handle different game states
+                if (state[i] == STATE_BEGIN)
+                {
+                    begin_game_logic(conn_fds[i], &state[i], &board_width, &board_height, buffer, player_num);
+                    valid_input = (state[i] == STATE_INIT);
+                }
+                else if (state[i] == STATE_INIT)
+                {
+                    init_game_logic(conn_fds[i], &state[i], &board_width, &board_height, game_boards, buffer, player_num);
+                    valid_input = (state[i] == STATE_PLAYING);
+                }
+                else if (state[i] == STATE_PLAYING)
+                {
+                    // Placeholder for game logic
+
+                    send_response(conn_fds[i], "A");
+                    valid_input = 1;
+                }
             }
         }
     }
@@ -204,70 +253,6 @@ int main()
 
     printf("[Server] Shutting down.\n");
     return EXIT_SUCCESS;
-}
-
-void handle_client(int conn_fd, int port, GameState *state, int *board_width, int *board_height, int game_boards[2][MAX_SIZE][MAX_SIZE])
-{
-    char buffer[BUFFER_SIZE];
-    memset(buffer, 0, BUFFER_SIZE);
-    int valid_input = 0;
-
-    while (!valid_input)
-    {
-        int nbytes = read_message(conn_fd, buffer, BUFFER_SIZE);
-        if (nbytes <= 0)
-        {
-            printf("[Server] Client on port %d disconnected.\n", port);
-            *state = STATE_DISCONNECTED;
-            close(conn_fd);
-            return;
-        }
-
-        printf("[Server] Received from client on port %d: %s\n", port, buffer);
-
-        // Determine which player is sending the message
-        int player_num = (port == PORT1) ? 1 : 2;
-
-        if (strcmp(buffer, "F") == 0)
-        {
-            printf("[Server] Client on port %d has forfeited.\n", port);
-            *state = STATE_DISCONNECTED;
-            close(conn_fd);
-            return;
-        }
-
-        // Call begin game logic if in initial state
-        if (*state == STATE_BEGIN)
-        {
-            begin_game_logic(conn_fd, state, board_width, board_height, buffer, player_num);
-            valid_input = (*state == STATE_INIT);
-            if (valid_input)
-            {
-                return;
-            }
-        }
-
-        if (*state == STATE_INIT)
-        {
-            init_game_logic(conn_fd, state, board_width, board_height, game_boards, buffer, player_num);
-            valid_input = (*state == STATE_INIT);
-            if (valid_input)
-            {
-                return;
-            }
-        }
-
-        // Handle the game logic for active clients
-        if (*state == STATE_PLAYING)
-        {
-            // Placeholder for game logic
-            printf("[Server] Enter message to client on port %d: ", port);
-            fgets(buffer, BUFFER_SIZE, stdin);
-            buffer[strlen(buffer) - 1] = '\0'; // Remove newline from fgets
-            send_response(conn_fd, buffer);
-            valid_input = 1; // Successfully handled player input
-        }
-    }
 }
 
 void begin_game_logic(int conn_fd, GameState *state, int *board_width, int *board_height, const char *buffer, int player_num)
@@ -380,7 +365,7 @@ void init_game_logic(int conn_fd, GameState *state, int *board_width, int *board
                     }
                 }
                 int(*board)[MAX_SIZE] = game_boards[player_num - 1];
-                
+
                 for (int j = 0; j < SHIP_SIZE; j++)
                 {
                     for (int k = 0; k < SHIP_SIZE; k++)
