@@ -164,7 +164,7 @@ int main()
     }
 
     int game_active = 1;
-    GameState state = STATE_DISCONNECTED;
+    GameState state = STATE_BEGIN;
 
     while (game_active) // Main game loop
     {
