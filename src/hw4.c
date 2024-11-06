@@ -28,10 +28,9 @@ typedef enum
 int *convert_to_int_array(const char *input_str, int *size);
 void send_response(int conn_fd, const char *response);
 int read_message(int conn_fd, char *buffer, int buffer_size);
-void begin_game_logic(int conn_fd, GameState *state, int *board_width, int *board_height, const char *buffer, int player_num);
-void init_game_logic(int conn_fd, GameState *state, int *board_width, int *board_height, int game_boards[2][MAX_SIZE][MAX_SIZE], const char *buffer, int player_num);
 void rotate_90_clockwise(int shape[SHIP_SIZE][SHIP_SIZE], int rotatedShape[SHIP_SIZE][SHIP_SIZE]);
 void print_board(int shape[MAX_SIZE][MAX_SIZE], int width, int height);
+void clear_board(int shape[MAX_SIZE][MAX_SIZE], int width, int height);
 
 int ship_shapes[NUM_SHAPES][ROTATIONS][SHIP_SIZE][SHIP_SIZE] = {
     {{// Shape 1: 0° rotation
@@ -123,9 +122,6 @@ int main()
     int game_boards[2][MAX_SIZE][MAX_SIZE] = {0};
     int ships_remaining[2] = {PIECE_COUNT, PIECE_COUNT};
 
-    // Game state
-    GameState state[2] = {STATE_BEGIN, STATE_BEGIN};
-
     // Set up the sockets for both players
     for (int i = 0; i < 2; i++)
     {
@@ -177,70 +173,196 @@ int main()
         printf("[Server] Client connected on port %d\n", ports[i]);
     }
 
-    // Main game loop
-    while (1)
-    {
-        for (int i = 0; i < 2; i++)
-        {
-            char buffer[BUFFER_SIZE];
-            memset(buffer, 0, BUFFER_SIZE);
-            int valid_input = 0;
+    int game_active = 1;
+    GameState state = STATE_BEGIN;
 
-            while (!valid_input)
+    while (game_active) // Main game loop
+    {
+        for (int player = 1, player_id = 0; player <= 2; player++, player_id++)
+        {
+            // Reset buffer contents
+            memset(buffer, 0, BUFFER_SIZE);
+            int pending_move = 1;
+
+            while (pending_move)
             {
-                int nbytes = read_message(conn_fds[i], buffer, BUFFER_SIZE);
+                int nbytes = read_message(conn_fds[player - 1], buffer, BUFFER_SIZE);
                 if (nbytes <= 0)
                 {
-                    printf("[Server] Client on port %d disconnected.\n", ports[i]);
-                    state[i] = STATE_DISCONNECTED;
-                    close(conn_fds[i]);
+                    printf("[Server] Could not read from port %d.\n", ports[player_id]);
+                    continue;
+                }
 
-                    // Check if both clients disconnected
-                    if (state[0] == STATE_DISCONNECTED && state[1] == STATE_DISCONNECTED)
-                    {
-                        printf("[Server] Both clients disconnected. Shutting down server.\n");
-                        close(listen_fds[0]);
-                        close(listen_fds[1]);
-                        return EXIT_SUCCESS;
+                // Display command
+                printf("[Server] Received from client on port %d: %s\n", ports[player_id], buffer);
+                char command = buffer[0];
+                int arg_count;
+                int *arguments = convert_to_int_array(buffer + 1, &arg_count); // Read arguments to the command
+
+                if (command == 'F') // Forfeit
+                {
+                    printf("[Server] Client on port %d has forfeited.\n", ports[player_id]);
+                    send_response(conn_fds[player - 1], "H 0"); // player who forfeits
+                    send_response(conn_fds[player % 2], "H 1"); // notify winner
+                    state = STATE_DISCONNECTED;
+                    pending_move = 0;
+                }
+                else if (state == STATE_BEGIN)
+                {
+                    if (command != 'B')
+                    { // If the message doesn't start with 'B', handle invalid input
+
+                        printf("[Server] Invalid input from Player %d: %s\n", player, buffer);
+                        send_response(conn_fds[player_id], "E 100"); // Invalid command
+                        continue;
                     }
-                    break;
+
+                    if ((player == 1 && arg_count != 2) || (player == 2 && arg_count != 0))
+                    {
+                        printf("[Server] Invalid arguments from Player %d: %s\n", player, buffer);
+                        send_response(conn_fds[player_id], "E 200"); // Invalid parameters
+                        continue;
+                    }
+
+                    if (player == 1) // PLAYER 1 BEGIN
+                    {
+                        if (arguments[0] < 10 || arguments[1] < 10)
+                        {
+                            send_response(conn_fds[player_id], "E 200");
+                            continue;
+                        }
+                        board_width = arguments[0];
+                        board_height = arguments[1];
+
+                        printf("[Server] Board will be %d by %d.\n", board_width, board_height);
+                    }
+                    else // PLAYER 2 BEGIN
+                    {
+                        printf("[Server] Starting game.\n", board_width, board_height);
+                        state = STATE_INIT;
+                    }
+
+                    send_response(conn_fds[player_id], "A"); // Acknowledgment for Player 1 ready
+                    pending_move = 0;
                 }
-
-                printf("[Server] Received from client on port %d: %s\n", ports[i], buffer);
-
-                int player_num = (ports[i] == PORT1) ? 1 : 2;
-
-                if (strcmp(buffer, "F") == 0)
+                else if (state == STATE_INIT)
                 {
-                    printf("[Server] Client on port %d has forfeited.\n", ports[i]);
-                    send_response(conn_fds[i], "H 0");
-                    send_response(conn_fds[(i + 1) % 2], "H 1");
-                    state[i] = STATE_DISCONNECTED;
-                    
-                    state[(i + 1) % 2] = STATE_DISCONNECTED;
-                    close(conn_fds[i]);
-                    close(conn_fds[(i + 1) % 2]);
-                    break;
-                }
+                    if (command != 'I')
+                    { // If the message doesn't start with 'I', handle invalid input
 
-                // Handle different game states
-                if (state[i] == STATE_BEGIN)
-                {
-                    begin_game_logic(conn_fds[i], &state[i], &board_width, &board_height, buffer, player_num);
-                    valid_input = (state[i] == STATE_INIT);
-                }
-                else if (state[i] == STATE_INIT)
-                {
-                    init_game_logic(conn_fds[i], &state[i], &board_width, &board_height, game_boards, buffer, player_num);
-                    valid_input = (state[i] == STATE_PLAYING);
-                }
-                else if (state[i] == STATE_PLAYING)
-                {
-                    // Placeholder for game logic
+                        printf("[Server] Invalid input from Player %d: %s\n", player, buffer);
+                        send_response(conn_fds[player_id], "E 101"); // Invalid command
+                        continue;
+                    }
+                    if (arg_count != PIECE_COUNT * 4)
+                    {
+                        printf("[Server] Invalid input from Player %d: %s\n", player, buffer);
+                        send_response(conn_fds[player_id], "E 201"); // Invalid arguments
+                        continue;
+                    }
 
-                    send_response(conn_fds[i], "A");
-                    valid_input = 1;
+                    for (int i = 0; i < PIECE_COUNT; i++)
+                    {
+                        int type = arguments[i * 4];
+                        int rotation = arguments[i * 4 + 1];
+                        int col = arguments[i * 4 + 2];
+                        int row = arguments[i * 4 + 3];
+
+                        if (type < 1 || type > 7)
+                        {
+                            printf("[Server] Shape out of range.");
+                            send_response(conn_fds[player_id], "E 300");
+                            continue;;
+                        }
+                        if (rotation < 1 || rotation > 4)
+                        {
+                            printf("[Server] Rotation out of range.");
+                            send_response(conn_fds[player_id], "E 301");
+                            continue;
+                        }
+                        if (row < 0 || row > board_height || col < 0 || col > board_width)
+                        {
+                            printf("[Server] Position out of game board.");
+                            send_response(conn_fds[player_id], "E 302");
+                            continue;
+                        }
+
+                        int(*shape)[SHIP_SIZE] = ship_shapes[type - 1][rotation - 1];
+
+                        int row_pos, col_pos;
+                        for (int i = 0, found = 0; i < SHIP_SIZE && !found; i++)
+                        {
+                            for (int j = 0; j < SHIP_SIZE && !found; j++)
+                            {
+                                if (shape[j][i] == 1)
+                                {
+                                    row_pos = j;
+                                    col_pos = i;
+                                    found = 1;
+                                }
+                            }
+                        }
+                        int(*board)[MAX_SIZE] = game_boards[player_id];
+
+                        for (int j = 0; j < SHIP_SIZE; j++)
+                        {
+                            for (int k = 0; k < SHIP_SIZE; k++)
+                            {
+
+                                int board_row = row - row_pos + j;
+                                int board_col = col - col_pos + k;
+                                if (board_row < 0 || board_row > board_height || board_col < 0 || board_col > board_width)
+                                {
+                                    for (int i = 0; i < MAX_SIZE; i++)
+                                    {
+                                        for (int j = 0; j < MAX_SIZE; j++)
+                                        {
+                                            game_boards[player_id][i][j] = 0;
+                                        }
+                                    }
+                                    printf("[Server] Doesn't fit.");
+                                    send_response(conn_fds[player_id], "E 302");
+                                    continue;
+                                }
+                                if (shape[j][k])
+                                {
+                                    if (board[board_row][board_col] == 0)
+                                    {
+                                        board[board_row][board_col] = shape[j][k];
+                                    }
+                                    else
+                                    {
+                                        for (int i = 0; i < MAX_SIZE; i++)
+                                        {
+                                            for (int j = 0; j < MAX_SIZE; j++)
+                                            {
+                                                game_boards[player_id][i][j] = 0;
+                                            }
+                                        }
+                                        printf("[Server] Overlap");
+                                        send_response(conn_fds[player_id], "E 303");
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                        //print_board(board, board_width, board_height);
+                    }
+                    send_response(conn_fds[player_id], "A");
+                    pending_move = 0;
                 }
+                else if (state == STATE_PLAYING)
+                {
+
+                }
+                free(arguments);
+            }
+
+            // Check if both clients are disconnected
+            if (state == STATE_DISCONNECTED)
+            {
+                printf("[Server] Both clients disconnected. Shutting down server.\n");
+                game_active = 0;
             }
         }
     }
@@ -253,184 +375,6 @@ int main()
 
     printf("[Server] Shutting down.\n");
     return EXIT_SUCCESS;
-}
-
-void begin_game_logic(int conn_fd, GameState *state, int *board_width, int *board_height, const char *buffer, int player_num)
-{
-    // Check if the message starts with 'B'
-    if (buffer[0] == 'B')
-    {
-        if (player_num == 1)
-        {
-            // Player 1 sending board size and other parameters
-            int arguments;
-            int *size = convert_to_int_array(buffer + 1, &arguments); // Skip 'B'
-
-            // Validate parameters: need at least 2 arguments and board dimensions should be at least 10
-            if (arguments < 2 || size[0] < 10 || size[1] < 10)
-            {
-                // Invalid parameters provided by Player 1
-                send_response(conn_fd, "E 200"); // Invalid parameters
-                free(size);
-                return;
-            }
-
-            // Set the board dimensions and acknowledge Player 1
-            *board_width = size[0];
-            *board_height = size[1];
-            *state = STATE_INIT;
-            printf("[Server] Board will be %d by %d.\n", *board_width, *board_height);
-            send_response(conn_fd, "A"); // Acknowledgment for Player 1 ready
-            free(size);
-        }
-        else
-        {
-            int arguments;
-            int *size = convert_to_int_array(buffer + 1, &arguments);
-            if (arguments > 0)
-            {
-                // Invalid parameters provided by Player 1
-                send_response(conn_fd, "E 200"); // Invalid parameters
-                free(size);
-                return;
-            }
-            // Player 2 response, just acknowledge the start
-            printf("[Server] Player 2 is ready. Starting game.\n");
-            *state = STATE_INIT;
-            send_response(conn_fd, "A"); // Acknowledgment for Player 2 ready
-            free(size);
-        }
-    }
-    else
-    {
-        // If the message doesn't start with 'B', handle invalid input
-        printf("[Server] Invalid input from Player %d: %s\n", player_num, buffer);
-        send_response(conn_fd, "E 100"); // Invalid command
-    }
-}
-
-void init_game_logic(int conn_fd, GameState *state, int *board_width, int *board_height, int game_boards[2][MAX_SIZE][MAX_SIZE], const char *buffer, int player_num)
-{
-    if (buffer[0] == 'I')
-    {
-
-        int arguments;
-        int *setup = convert_to_int_array(buffer + 1, &arguments);
-
-        // Validate parameters: need at least 2 arguments and board dimensions should be at least 10
-        if (arguments >= PIECE_COUNT * 4)
-        {
-            for (int i = 0; i < PIECE_COUNT; i++)
-            {
-                int type = setup[i * 4];
-                int rotation = setup[i * 4 + 1];
-                int col = setup[i * 4 + 2];
-                int row = setup[i * 4 + 3];
-
-                if (type < 1 || type > 7)
-                {
-                    printf("[Server] Shape out of range.");
-                    send_response(conn_fd, "E 300");
-                    free(setup);
-                    return;
-                }
-                if (rotation < 1 || rotation > 4)
-                {
-                    printf("[Server] Rotation out of range.");
-                    send_response(conn_fd, "E 301");
-                    free(setup);
-                    return;
-                }
-                if (row < 0 || row > *board_height || col < 0 || col > *board_width)
-                {
-                    printf("[Server] Position out of game board.");
-                    send_response(conn_fd, "E 302");
-                    free(setup);
-                    return;
-                }
-
-                int(*shape)[SHIP_SIZE] = ship_shapes[type - 1][rotation - 1];
-
-                int row_pos, col_pos;
-                for (int i = 0, found = 0; i < SHIP_SIZE && !found; i++)
-                {
-                    for (int j = 0; j < SHIP_SIZE && !found; j++)
-                    {
-                        if (shape[j][i] == 1)
-                        {
-                            row_pos = j;
-                            col_pos = i;
-                            found = 1;
-                        }
-                    }
-                }
-                int(*board)[MAX_SIZE] = game_boards[player_num - 1];
-
-                for (int j = 0; j < SHIP_SIZE; j++)
-                {
-                    for (int k = 0; k < SHIP_SIZE; k++)
-                    {
-
-                        int board_row = row - row_pos + j;
-                        int board_col = col - col_pos + k;
-                        if (board_row < 0 || board_row > *board_height || board_col < 0 || board_col > *board_width)
-                        {
-                            for (int i = 0; i < MAX_SIZE; i++)
-                            {
-                                for (int j = 0; j < MAX_SIZE; j++)
-                                {
-                                    game_boards[player_num - 1][i][j] = 0;
-                                }
-                            }
-                            printf("[Server] Doesn't fit.");
-                            send_response(conn_fd, "E 302");
-                            free(setup);
-                            return;
-                        }
-                        if (shape[j][k])
-                        {
-                            if (board[board_row][board_col] == 0)
-                            {
-                                board[board_row][board_col] = shape[j][k];
-                            }
-                            else
-                            {
-                                for (int i = 0; i < MAX_SIZE; i++)
-                                {
-                                    for (int j = 0; j < MAX_SIZE; j++)
-                                    {
-                                        game_boards[player_num - 1][i][j] = 0;
-                                    }
-                                }
-                                printf("[Server] Overlap");
-                                send_response(conn_fd, "E 303");
-                                free(setup);
-                                return;
-                            }
-                        }
-                    }
-                }
-                print_board(board, *board_width, *board_height);
-            }
-        }
-        else
-        {
-            printf("[Server] Invalid input from Player %d: %s\n", player_num, buffer);
-            send_response(conn_fd, "E 201");
-            free(setup);
-            return;
-        }
-
-        *state = STATE_PLAYING;
-        printf("[Server] Player %d has initialized their pieces.\n", player_num);
-        send_response(conn_fd, "A");
-        free(setup);
-    }
-    else
-    {
-        printf("[Server] Invalid input from Player %d: %s\n", player_num, buffer);
-        send_response(conn_fd, "E 101");
-    }
 }
 
 void send_response(int conn_fd, const char *response)
@@ -494,4 +438,15 @@ void print_board(int shape[MAX_SIZE][MAX_SIZE], int width, int height)
         printf("\n");
     }
     printf("\n");
+}
+
+void clear_board(int shape[MAX_SIZE][MAX_SIZE], int width, int height)
+{
+    for (int i = 0; i < width; i++)
+    {
+        for (int j = 0; j < height; j++)
+        {
+            shape[i][j] = 0;
+        }
+    }
 }
