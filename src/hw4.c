@@ -178,6 +178,7 @@ int main()
 
     // Main game loop
     int game_over = 0;
+    int winner = 0;
     while (!game_over)
     {
         print_boards(game_boards, board_width, board_height);
@@ -189,6 +190,7 @@ int main()
             {
                 memset(buffer, 0, BUFFER_SIZE);
                 int nbytes = read_message(conn_fds[player - 1], buffer, BUFFER_SIZE);
+
                 printf("Player %d: %s\n", player, buffer);
                 if (nbytes <= 0)
                 {
@@ -197,7 +199,7 @@ int main()
                     close(conn_fds[player_id]);
                     continue;
                 }
-
+                
                 char command = buffer[0];
                 int arg_count;
                 int *arguments = convert_to_int_array(buffer + 1, &arg_count); // Read arguments to the command
@@ -208,6 +210,7 @@ int main()
                     send_response(conn_fds[player_id], "H 0");  // player who forfeits
                     send_response(conn_fds[player % 2], "H 1"); // notify winner
                     state[player_id] = STATE_DISCONNECTED;
+                    state[player % 2] = STATE_DISCONNECTED;
                     pending_move = 0;
                 }
                 else if (state[player_id] == STATE_BEGIN)
@@ -446,12 +449,13 @@ int main()
                             if (ship_sunk)
                             {
                                 ships_remaining[player % 2]--;
-                                if (ships_remaining == 0)
+                                if (ships_remaining[player % 2] == 0)
                                 {
                                     printf("[Server] Player %d has won.\n", player);
-                                    send_response(conn_fds[player_id], "H 1");  // player who wins
-                                    send_response(conn_fds[player % 2], "H 0"); // notify loser
+                                    winner = player;
+
                                     state[player_id] = STATE_DISCONNECTED;
+                                    state[player % 2] = STATE_DISCONNECTED;
                                     pending_move = 0;
                                 }
                             }
@@ -475,6 +479,15 @@ int main()
             // Check if both clients are disconnected
             if (state[player_id] == STATE_DISCONNECTED)
             {
+                if (winner)
+                {
+                    int nbytes = read_message(conn_fds[winner - 1], buffer, BUFFER_SIZE);
+                    send_response(conn_fds[winner - 1], "H 1"); // player who wins
+                    nbytes = read_message(conn_fds[winner % 2], buffer, BUFFER_SIZE);
+                    send_response(conn_fds[winner % 2], "H 0"); // notify loser
+                }
+                
+
                 printf("[Server] Both clients disconnected. Shutting down server.\n");
                 close(listen_fds[0]);
                 close(listen_fds[1]);
