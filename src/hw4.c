@@ -202,7 +202,7 @@ int main()
                 if (command == 'F') // Forfeit
                 {
                     printf("[Server] Client on port %d has forfeited.\n", ports[player_id]);
-                    send_response(conn_fds[player - 1], "H 0"); // player who forfeits
+                    send_response(conn_fds[player_id], "H 0");  // player who forfeits
                     send_response(conn_fds[player % 2], "H 1"); // notify winner
                     state = STATE_DISCONNECTED;
                     pending_move = 0;
@@ -272,7 +272,8 @@ int main()
                         {
                             printf("[Server] Shape out of range.");
                             send_response(conn_fds[player_id], "E 300");
-                            continue;;
+                            continue;
+                            ;
                         }
                         if (rotation < 1 || rotation > 4)
                         {
@@ -346,14 +347,96 @@ int main()
                                 }
                             }
                         }
-                        //print_board(board, board_width, board_height);
+                        // print_board(board, board_width, board_height);
                     }
                     send_response(conn_fds[player_id], "A");
                     pending_move = 0;
+                    if (player == 2)
+                    {
+                        state = STATE_PLAYING;
+                    }
                 }
                 else if (state == STATE_PLAYING)
                 {
+                    if (command == 'Q')
+                    {
+                        buffer[0] = 'G';
+                        buffer[1] = ' ';
+                        buffer[2] = '0' + ships_remaining[player_id % 2];
+                        buffer[3] = ' ';
+                        int index = 4;
+                        for (int i = 0; i < board_height; i++)
+                        {
+                            for (int j = 0; j < board_width; j++)
+                            {
+                                if (game_boards[player % 2][i][j] == 'M' || game_boards[player % 2][i][j] < 0)
+                                {
+                                    buffer[index] = (game_boards[player_id % 2][i][j] < 0) ? 'H' : 'M';
+                                    buffer[index + 1] = ' ';
+                                    buffer[index + 2] = '0' + j;
+                                    buffer[index + 3] = ' ';
+                                    buffer[index + 4] = '0' + i;
+                                    buffer[index + 5] = ' ';
+                                    index += 6;
+                                }
+                            }
+                            
+                        }
+                        buffer[index - 1] = '\0';
+                        send_response(conn_fds[player_id], buffer);
+                    }
+                    else if (command == 'S')
+                    {
+                        int row = arguments[1];
+                        int col = arguments[0];
+                        char response[] = "R 0 M";
+                        if (col < 0 || col > board_width || col < 0 || col > board_height)
+                        {
+                            send_response(conn_fds[player_id], "E 400");
+                            continue;
+                        }
+                        if (game_boards[player % 2][row][col] < 0)
+                        {
+                            send_response(conn_fds[player_id], "E 401");
+                            continue;
+                        }
+                        else if (game_boards[player % 2][row][col] == 0)
+                        {
 
+                            response[2] = '0' + ships_remaining[player % 2];
+                            game_boards[player % 2][row][col] = 'M';
+                            send_response(conn_fds[player_id], response);
+                        }
+                        else
+                        {
+                            int ship_id = game_boards[player % 2][row][col];
+                            int ship_sunk = 1;
+                            for (int i = 0; i < board_height && !ship_sunk; i++)
+                            {
+                                for (int j = 0; j < board_width && !ship_sunk; j++)
+                                {
+                                    if (game_boards[player % 2][i][j] == ship_id)
+                                    {
+                                        ship_sunk = 0;
+                                    }
+                                }
+                            }
+                            if (ship_sunk)
+                            {
+                                ships_remaining[player % 2]--;
+                            }
+
+                            response[2] = '0' + ships_remaining[player % 2];
+                            response[4] = 'H';
+                        }
+                        send_response(conn_fds[player_id], response);
+                        pending_move = 0;
+                    }
+                    else
+                    {
+                        send_response(conn_fds[player_id], "E 102");
+                        continue;
+                    }
                 }
                 free(arguments);
             }
