@@ -98,16 +98,6 @@ int main()
 {
     precomputeRotations();
 
-    for (int shape = 0; shape < NUM_SHAPES; shape++)
-    {
-        printf("Shape %d:\n", shape + 1);
-        for (int rotation = 0; rotation < ROTATIONS; rotation++)
-        {
-            printf("Rotation %d degrees:\n", rotation * 90);
-            printShape(ship_shapes[shape][rotation]);
-        }
-    }
-
     int listen_fds[2], conn_fds[2];
     struct sockaddr_in addresses[2];
     int ports[2] = {PORT1, PORT2};
@@ -183,8 +173,8 @@ int main()
             // Reset buffer contents
             memset(buffer, 0, BUFFER_SIZE);
             int pending_move = 1;
-
-            while (pending_move)
+            print_board(game_boards[player_id], board_width, board_height);
+            while (pending_move && game_active)
             {
                 int nbytes = read_message(conn_fds[player - 1], buffer, BUFFER_SIZE);
                 if (nbytes <= 0)
@@ -329,7 +319,7 @@ int main()
                                 {
                                     if (board[board_row][board_col] == 0)
                                     {
-                                        board[board_row][board_col] = shape[j][k];
+                                        board[board_row][board_col] = i + 1;
                                     }
                                     else
                                     {
@@ -358,7 +348,7 @@ int main()
                 }
                 else if (state == STATE_PLAYING)
                 {
-                    if (command == 'Q')
+                    if (command == 'Q' && arg_count == 0)
                     {
                         buffer[0] = 'G';
                         buffer[1] = ' ';
@@ -385,7 +375,7 @@ int main()
                         buffer[index - 1] = '\0';
                         send_response(conn_fds[player_id], buffer);
                     }
-                    else if (command == 'S')
+                    else if (command == 'S' && arg_count == 2)
                     {
                         int row = arguments[1];
                         int col = arguments[0];
@@ -395,7 +385,7 @@ int main()
                             send_response(conn_fds[player_id], "E 400");
                             continue;
                         }
-                        if (game_boards[player % 2][row][col] < 0)
+                        if (game_boards[player % 2][row][col] < 0 || game_boards[player % 2][row][col] == 'M')
                         {
                             send_response(conn_fds[player_id], "E 401");
                             continue;
@@ -405,15 +395,15 @@ int main()
 
                             response[2] = '0' + ships_remaining[player % 2];
                             game_boards[player % 2][row][col] = 'M';
-                            send_response(conn_fds[player_id], response);
                         }
                         else
                         {
                             int ship_id = game_boards[player % 2][row][col];
+                            game_boards[player % 2][row][col] *= -1;
                             int ship_sunk = 1;
-                            for (int i = 0; i < board_height && !ship_sunk; i++)
+                            for (int i = 0; i < board_height && ship_sunk; i++)
                             {
-                                for (int j = 0; j < board_width && !ship_sunk; j++)
+                                for (int j = 0; j < board_width && ship_sunk; j++)
                                 {
                                     if (game_boards[player % 2][i][j] == ship_id)
                                     {
@@ -445,7 +435,9 @@ int main()
             if (state == STATE_DISCONNECTED)
             {
                 printf("[Server] Both clients disconnected. Shutting down server.\n");
-                game_active = 0;
+                close(listen_fds[0]);
+                close(listen_fds[1]);
+                return EXIT_SUCCESS;
             }
         }
     }
