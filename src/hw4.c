@@ -30,6 +30,7 @@ void send_response(int conn_fd, const char *response);
 int read_message(int conn_fd, char *buffer, int buffer_size);
 void rotate_90_clockwise(int shape[SHIP_SIZE][SHIP_SIZE], int rotatedShape[SHIP_SIZE][SHIP_SIZE]);
 void print_board(int shape[MAX_SIZE][MAX_SIZE], int width, int height);
+void print_boards(int shape[2][MAX_SIZE][MAX_SIZE], int width, int height);
 
 int ship_shapes[NUM_SHAPES][ROTATIONS][SHIP_SIZE][SHIP_SIZE] = {
     {{// Shape 1: 0° rotation
@@ -179,10 +180,11 @@ int main()
     int game_over = 0;
     while (!game_over)
     {
+        print_boards(game_boards, board_width, board_height);
         for (int player = 1, player_id = 0; player <= 2; player++, player_id++)
         {
             int pending_move = 1;
-            // print_board(game_boards[player_id], board_width, board_height);
+
             while (pending_move && !game_over)
             {
                 memset(buffer, 0, BUFFER_SIZE);
@@ -368,7 +370,7 @@ int main()
                 }
                 else if (state[player_id] == STATE_PLAYING)
                 {
-                    if (command == 'Q' && arg_count == 0)
+                    if (command == 'Q')
                     {
                         buffer[0] = 'G';
                         buffer[1] = ' ';
@@ -381,7 +383,14 @@ int main()
                             {
                                 if (game_boards[player % 2][i][j] == 'M' || game_boards[player % 2][i][j] < 0)
                                 {
-                                    buffer[index] = (game_boards[player_id % 2][i][j] < 0) ? 'H' : 'M';
+                                    if (game_boards[player % 2][i][j] == 'M')
+                                    {
+                                        buffer[index] = 'M';
+                                    }
+                                    else
+                                    {
+                                        buffer[index] = 'H';
+                                    }
                                     buffer[index + 1] = ' ';
                                     buffer[index + 2] = '0' + j;
                                     buffer[index + 3] = ' ';
@@ -394,12 +403,17 @@ int main()
                         buffer[index - 1] = '\0';
                         send_response(conn_fds[player_id], buffer);
                     }
-                    else if (command == 'S' && arg_count == 2)
+                    else if (command == 'S')
                     {
-                        int row = arguments[1];
-                        int col = arguments[0];
+                        int row = arguments[0];
+                        int col = arguments[1];
                         char response[] = "R 0 M";
-                        if (col < 0 || col > board_width || col < 0 || col > board_height)
+                        if (arg_count != 2)
+                        {
+                            send_response(conn_fds[player_id], "E 202");
+                            continue;
+                        }
+                        if (col < 0 || col > board_width || row < 0 || row > board_height)
                         {
                             send_response(conn_fds[player_id], "E 400");
                             continue;
@@ -411,7 +425,6 @@ int main()
                         }
                         else if (game_boards[player % 2][row][col] == 0)
                         {
-
                             response[2] = '0' + ships_remaining[player % 2];
                             game_boards[player % 2][row][col] = 'M';
                         }
@@ -433,12 +446,21 @@ int main()
                             if (ship_sunk)
                             {
                                 ships_remaining[player % 2]--;
+                                if (ships_remaining == 0)
+                                {
+                                    printf("[Server] Player %d has won.\n", player);
+                                    send_response(conn_fds[player_id], "H 1");  // player who wins
+                                    send_response(conn_fds[player % 2], "H 0"); // notify loser
+                                    state[player_id] = STATE_DISCONNECTED;
+                                    pending_move = 0;
+                                }
                             }
 
                             response[2] = '0' + ships_remaining[player % 2];
                             response[4] = 'H';
                         }
                         send_response(conn_fds[player_id], response);
+                        printf("Shooting %d, %d, which is %d:    %s\n", col, row, game_boards[player % 2][row][col], response);
                         pending_move = 0;
                     }
                     else
@@ -527,8 +549,56 @@ void print_board(int shape[MAX_SIZE][MAX_SIZE], int width, int height)
     {
         for (int j = 0; j < height; j++)
         {
-            printf("%d ", shape[i][j]);
+            if (shape[i][j] < 0)
+            {
+                printf("X ");
+            }
+            else if (shape[i][j] == 'M')
+            {
+                printf("O ");
+            }
+            else if (shape[i][j] == 0)
+            {
+                printf("- ");
+            }
+            else
+            {
+                printf("%d ", shape[i][j]);
+            }
         }
+        printf("\n");
+    }
+    printf("\n");
+}
+
+void print_boards(int shape[2][MAX_SIZE][MAX_SIZE], int width, int height)
+{
+    for (int i = 0; i < width; i++)
+    {
+        for (int board = 0; board < 2; board++)
+        {
+            for (int j = 0; j < height; j++)
+            {
+                if (shape[board][i][j] < 0)
+                {
+                    printf("X ");
+                }
+                else if (shape[board][i][j] == 'M')
+                {
+                    printf("O ");
+                }
+                else if (shape[board][i][j] == 0)
+                {
+                    printf("- ");
+                }
+                else
+                {
+                    printf("%d ", shape[board][i][j]);
+                }
+            }
+            printf("\t\t");
+        }
+
         printf("\n");
     }
     printf("\n");
