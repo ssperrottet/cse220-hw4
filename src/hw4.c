@@ -164,18 +164,17 @@ int main()
     }
 
     int game_active = 1;
-    GameState state = STATE_BEGIN;
+    GameState state = STATE_DISCONNECTED;
 
     while (game_active) // Main game loop
     {
         for (int player = 1, player_id = 0; player <= 2; player++, player_id++)
-        {
-            // Reset buffer contents
-            memset(buffer, 0, BUFFER_SIZE);
+        {       
             int pending_move = 1;
             print_board(game_boards[player_id], board_width, board_height);
             while (pending_move && game_active)
             {
+                memset(buffer, 0, BUFFER_SIZE);
                 int nbytes = read_message(conn_fds[player - 1], buffer, BUFFER_SIZE);
                 if (nbytes <= 0)
                 {
